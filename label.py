@@ -92,7 +92,7 @@ class Clicker:
         ifile : str
             Path to the input image file.
         """
-        raw = plt.imread(ifile)[:512, :512, :]
+        raw = plt.imread(ifile) #[:512, :512, :]
         r = raw[:,:,0].astype(float)
         b = raw[:,:,2].astype(float)
         g = r * (r + 2 * b * (1 - r))
