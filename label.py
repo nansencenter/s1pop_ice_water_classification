@@ -7,7 +7,7 @@ import numpy as np
 from skimage.segmentation import mark_boundaries, slic
 from PIL import Image
 from matplotlib.widgets import Button, Slider, CheckButtons
-from skimage import graph
+from skimage import graph, measure
 
 
 def _weight_mean_color(graph, src, dst, n):
@@ -120,12 +120,13 @@ class Clicker:
                 return
             if self.fig.canvas.toolbar.mode == 'zoom rect' or self.fig.canvas.toolbar.mode == 'pan/zoom': # ignors the clicks when zoom or pan is turned on
                 return
-            print(f'Clicked at: ({event.xdata}, {event.ydata} {event.button}) {self.img[int(event.ydata), int(event.xdata)]}')
             label_id = self.labels[int(event.ydata), int(event.xdata)]
             mask_value = self.ice_mask[int(event.ydata), int(event.xdata)]
+            new_mask_value = {0: 0, 1: 2, 2: 1}[mask_value]
+            print(f'Clicked at: ({event.xdata}, {event.ydata} {event.button}) {self.img[int(event.ydata), int(event.xdata)]} {label_id} {mask_value} -> {new_mask_value}')
             if mask_value == 0:
                 return
-            self.ice_mask[self.labels == label_id] = {0: 0, 1: 2, 2: 1}[mask_value]
+            self.ice_mask[self.labels == label_id] = new_mask_value
             self.ax.images[2].set_data(self.ice_mask)
             self.fig.canvas.draw()
             
@@ -227,7 +228,7 @@ class Clicker:
         self.ax.clear()
         self.image_layer = self.ax.imshow(self.img)
         self.regions_layer = self.ax.imshow(mark_boundaries(self.img, self.labels, color=(1,1,1)))
-        self.ice_mask_layer = self.ax.imshow(self.ice_mask, alpha=self.alpha, cmap='gray')
+        self.ice_mask_layer = self.ax.imshow(self.ice_mask, alpha=self.alpha, cmap='gray', clim=[0, 2])
         self.fig.canvas.draw()
 
 
@@ -268,6 +269,10 @@ class Clicker:
     def segment_image(self):
         """ Segments the image using SLIC and hierarchical merging. """
         labels0 = slic(self.img, n_segments=self.n_segments, compactness=self.compactness, sigma=self.sigma, start_label=1, mask = (self.mask & self.water_mask), enforce_connectivity = True, )
+        # SLIC with a mask can still return spatially disconnected segments.
+        # Relabel so that each connected component gets its own label
+        # (adjacent pixels with the same label form one component; 0 = masked out).
+        labels0 = measure.label(labels0, background=0, connectivity=1)
         g = graph.rag_mean_color(self.img, labels0)
         self.labels = graph.merge_hierarchical(
             labels0,
@@ -304,33 +309,37 @@ class Clicker:
 def main():
     """ Main function to run the interactive image labeling tool. """
     
-    # TODO: 
-    # Add argument parsing for input and output directories, and parameters
-    
-    idir = 'collocated'
-    outdir = 'ice_masks'
-    sigma=2
-    compactness=10
-    thresh=5
-    n_segments=800
+    root_dir = 'corrected'
+    png_dir = f'{root_dir}/png'
+    mask_dir = f'{root_dir}/ice_masks'
+    sigma = 2
+    compactness = 10
+    thresh = 5
+    n_segments = 800
+    force = True
 
-    ifiles = sorted(glob.glob(f'{idir}/*.png'))
-    for i, ifile in enumerate(ifiles):
-        clicker = Clicker(ifile, outdir, sigma=sigma, compactness=compactness, thresh=thresh, n_segments=n_segments)
+    ifiles = sorted(glob.iglob(f'{png_dir}/*/*.png'))
+    for ifile in ifiles:
+        platf_date_dir = os.path.split(ifile)[0].split('/')[-1]
+        out_dir = f'{mask_dir}/{platf_date_dir}'
+        os.makedirs(out_dir, exist_ok=True)
+        clicker = Clicker(ifile, out_dir, sigma=sigma, compactness=compactness, thresh=thresh, n_segments=n_segments)
         clicker.load_image(ifile)
         if os.path.exists(clicker.out_file):
-            continue      # skips the png files which alredy have an ice_mask created and updated
-            clicker.ice_mask = np.load(clicker.out_file)['ice_mask']
-            clicker.sigma = float(np.load(clicker.out_file)["sigma"])
-            clicker.compactness = float(np.load(clicker.out_file)["compactness"])
-            clicker.thresh = float(np.load(clicker.out_file)["thresh"])
-            clicker.n_segments = int(np.load(clicker.out_file)["n_segments"])
-        
+            if force:
+                clicker.ice_mask = np.load(clicker.out_file)['ice_mask']
+                clicker.sigma = float(np.load(clicker.out_file)["sigma"])
+                clicker.compactness = float(np.load(clicker.out_file)["compactness"])
+                clicker.thresh = float(np.load(clicker.out_file)["thresh"])
+                clicker.n_segments = int(np.load(clicker.out_file)["n_segments"])
+            else:
+                continue
+        print(ifile)
         clicker.segment_image()
         clicker.update_ice_mask()
         clicker.figure(ifile)
         clicker.save_ice_mask()
-        #break
+        break
 
 if __name__ == "__main__":
     main()
